@@ -1,0 +1,23 @@
+# .NET
+agent/bin/
+agent/obj/
+*.user
+
+# Android / Gradle
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vs/
+.vscode/
