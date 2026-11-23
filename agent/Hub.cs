@@ -57,11 +57,24 @@ sealed class Hub
             if (helloText == null || JsonNode.Parse(helloText) is not JsonObject hello || (string?)hello["cmd"] != "hello") return;
 
             var token = (string?)hello["token"];
+            Task<string?>? carried = null;
             if (!Pairing.IsKnown(token))
             {
                 var name = Trunc((string?)hello["name"] ?? "Phone", 40);
                 await Send(c, JsonSerializer.Serialize(new { type = "pairing" }, Json));
-                var newToken = await Pairing.Ask(name, remote?.MapToIPv4().ToString() ?? "?");
+
+                // Keep a receive pending while the laptop dialog is open: it answers the phone's pings (so the
+                // socket survives a slow click) and tells us if the phone leaves (then the dialog is skipped).
+                carried = ReceiveText(ws, buf, ms, ct);
+                using var askCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var ask = Pairing.Ask(name, remote?.MapToIPv4().ToString() ?? "?", askCts.Token);
+                if (await Task.WhenAny(ask, carried) == carried)
+                {
+                    askCts.Cancel(); // the phone left or spoke out of turn
+                    await ask;
+                    return;
+                }
+                var newToken = await ask;
                 if (newToken == null)
                 {
                     await Send(c, JsonSerializer.Serialize(new { type = "rejected" }, Json));
@@ -73,10 +86,11 @@ sealed class Hub
             // 2. Paired: stream the state, accept commands.
             clients[c] = 0;
             Log.Info($"phone connected from {remote} ({clients.Count} total)");
-            await PushTo(c, await Build(sampleStats: true));
+            await PushTo(c, await Build(sampleStats: true), skipIfBusy: false);
             while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
             {
-                var text = await ReceiveText(ws, buf, ms, ct);
+                var text = carried != null ? await carried : await ReceiveText(ws, buf, ms, ct);
+                carried = null;
                 if (text == null) break;
                 await Handle(text);
             }
@@ -85,7 +99,12 @@ sealed class Hub
         catch (Exception e) { Log.Error("client", e); }
         finally
         {
-            if (clients.TryRemove(c, out _)) Log.Info($"phone disconnected ({clients.Count} left)");
+            if (clients.TryRemove(c, out _))
+            {
+                Log.Info($"phone disconnected ({clients.Count} left)");
+                // nobody left to answer: hand any waiting permission requests back to the terminal right away
+                if (clients.IsEmpty) Claude.ReleasePending();
+            }
             if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
                 try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
@@ -156,9 +175,6 @@ sealed class Hub
             case "claude":
                 Claude.Decide((string?)o["id"] ?? "", (string?)o["decision"] ?? "");
                 return; // Decide triggers its own push
-            case "demo":
-                if (o["on"] is JsonValue dv && dv.TryGetValue<bool>(out var on)) Claude.SetDemo(on);
-                return;
             default:
                 return;
         }
@@ -178,6 +194,7 @@ sealed class Hub
             if (m != null && m.Title.Length > 0) lyrics.Track(m.Title, m.Artist, m.Duration);
             else lyrics.Clear();
             var vol = Volume.Get();
+            var lyr = lyrics.Current();
 
             var state = new
             {
@@ -193,21 +210,22 @@ sealed class Hub
                 media = m is null ? null : new { m.Title, m.Artist, m.App, m.Playing, m.Position, m.Duration },
                 artVersion = media.ArtVersion,
                 claude = Claude.Snapshot(),
-                demo = Claude.DemoEnabled,
-                lyricsVersion = lyrics.Version,
+                lyricsVersion = lyr.Version,
                 now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
-            var lyricsJson = JsonSerializer.Serialize(new { type = "lyrics", version = lyrics.Version, lines = lyrics.Lines }, Json);
-            return new Snapshot(JsonSerializer.Serialize(state, Json), media.ArtVersion, media.ArtBase64, lyrics.Version, lyricsJson);
+            var lyricsJson = JsonSerializer.Serialize(new { type = "lyrics", version = lyr.Version, lines = lyr.Lines }, Json);
+            return new Snapshot(JsonSerializer.Serialize(state, Json), media.ArtVersion, media.ArtBase64, lyr.Version, lyricsJson);
         }
         finally { buildLock.Release(); }
     }
 
-    Task Broadcast(Snapshot s) => Task.WhenAll(clients.Keys.Select(c => PushTo(c, s)));
+    // A phone still busy with the previous push (slow Wi-Fi) skips this one instead of holding up the others.
+    Task Broadcast(Snapshot s) => Task.WhenAll(clients.Keys.Select(c => PushTo(c, s, skipIfBusy: true)));
 
-    static async Task PushTo(Client c, Snapshot s)
+    static async Task PushTo(Client c, Snapshot s, bool skipIfBusy)
     {
-        await c.SendLock.WaitAsync();
+        if (skipIfBusy) { if (!await c.SendLock.WaitAsync(0)) return; }
+        else await c.SendLock.WaitAsync();
         try
         {
             if (c.Ws.State != WebSocketState.Open) return;

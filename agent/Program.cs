@@ -24,7 +24,9 @@ static class Program
         builder.WebHost.UseUrls($"http://0.0.0.0:{HttpPort}");
 
         var app = builder.Build();
-        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(15) });
+        // Ping every 5 s and drop a phone that stops answering within 10 s (Wi-Fi gone, phone asleep), so it never
+        // lingers as a ghost that makes Claude wait for an answer that cannot come.
+        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(5), KeepAliveTimeout = TimeSpan.FromSeconds(10) });
         app.Use(async (ctx, next) =>
         {
             if (ctx.Request.Path != "/ws") { await next(ctx); return; }

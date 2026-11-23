@@ -395,7 +395,7 @@ private fun ClaudeTab(st: Stats, vm: PanelViewModel) {
                 if (st.sessions.isEmpty()) {
                     Column(Modifier.align(Alignment.TopCenter).padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("NO CLAUDE SESSIONS OPEN", fontFamily = PixelHead, fontSize = 9.sp)
-                        Text("Start Claude Code on the laptop, or try the demo battle →", fontSize = 18.sp, color = Muted)
+                        Text("Start Claude Code on the laptop and it shows up here", fontSize = 18.sp, color = Muted)
                     }
                 }
             }
@@ -406,10 +406,6 @@ private fun ClaudeTab(st: Stats, vm: PanelViewModel) {
                 itemsIndexed(ranked, key = { _, it -> it.value.id }) { rank, item ->
                     LeaderRow(rank + 1, item.value, item.index, st.clockOffset)
                 }
-            }
-            Spacer(Modifier.height(6.dp))
-            PixelButton({ vm.demo(!st.demo) }, Modifier.fillMaxWidth(), bg = if (st.demo) Red.copy(alpha = 0.75f) else Track) {
-                Text(if (st.demo) "■ STOP DEMO BATTLE" else "▶ DEMO BATTLE", fontFamily = PixelHead, fontSize = 8.sp)
             }
         }
     }
@@ -443,10 +439,6 @@ private fun LeaderRow(rank: Int, s: Session, colorIndex: Int, clockOffset: Long)
                     overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Spacer(Modifier.width(6.dp))
                 Text("LV${s.stats.level}", fontFamily = PixelHead, fontSize = 7.sp, color = Muted)
-                if (s.demo) {
-                    Spacer(Modifier.width(6.dp))
-                    Text("DEMO", fontFamily = PixelHead, fontSize = 6.sp, color = Muted)
-                }
             }
             SegBar(s.stats.levelProgress, colors.body, Modifier.fillMaxWidth().padding(vertical = 3.dp).height(6.dp), segments = 16)
             Text(
@@ -493,7 +485,7 @@ private fun PermissionOverlay(s: Session, index: Int, p: Pending, clockOffset: L
                 Column(Modifier.weight(1f)) {
                     Text("PERMISSION REQUEST", fontFamily = PixelHead, fontSize = 11.sp, color = Amber)
                     Text(
-                        "${s.name.uppercase()} WANTS TO USE ${p.tool.uppercase()}${if (s.demo) " (DEMO)" else ""}",
+                        "${s.name.uppercase()} WANTS TO USE ${p.tool.uppercase()}",
                         fontSize = 19.sp, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -534,7 +526,7 @@ private const val ClaudeTimeoutSeconds = 60f
 // ---------------------------------------------------------------- connecting / pairing
 
 @Composable
-private fun ConnectView(s: PanelState, onRetry: () -> Unit, onAddress: (String) -> Unit) {
+private fun ConnectView(s: PanelState, onRetry: () -> Unit, onAddress: (String) -> Boolean) {
     var ask by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         TimeLapse(Modifier.fillMaxSize())
@@ -570,22 +562,24 @@ private fun ConnectView(s: PanelState, onRetry: () -> Unit, onAddress: (String) 
     }
     if (ask) {
         var ip by remember { mutableStateOf("") }
+        var bad by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { ask = false },
             title = { Text("LAPTOP IP ADDRESS", fontFamily = PixelHead, fontSize = 11.sp) },
             text = {
                 OutlinedTextField(
                     value = ip,
-                    onValueChange = { ip = it },
+                    onValueChange = { ip = it; bad = false },
                     singleLine = true,
+                    isError = bad,
+                    supportingText = if (bad) ({ Text("Use an address like 192.168.1.3 or 192.168.1.3:47811") }) else null,
                     placeholder = { Text("192.168.1.3") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    ask = false
-                    if (ip.isNotBlank()) onAddress(ip)
+                    if (onAddress(ip)) ask = false else bad = true
                 }) { Text("CONNECT") }
             },
             dismissButton = { TextButton(onClick = { ask = false }) { Text("CANCEL") } },

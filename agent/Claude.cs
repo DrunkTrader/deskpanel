@@ -14,7 +14,6 @@ sealed class ClaudeSession
     public DateTime Started = DateTime.UtcNow;
     public DateTime LastEvent = DateTime.UtcNow;
     public PendingPermission? Pending;
-    public bool Demo;
     public string Title = "";
     public bool FromRegistry;
 
@@ -44,19 +43,15 @@ sealed class ClaudeTracker
 
     readonly object gate = new();
     readonly Dictionary<string, ClaudeSession> sessions = new();
-    System.Threading.Timer? demoTimer;
-    readonly Random rng = new();
 
     public event Action? Changed;
-
-    public bool DemoEnabled => demoTimer != null;
 
     public object Snapshot()
     {
         var now = DateTime.UtcNow;
         lock (gate)
         {
-            foreach (var s in sessions.Values.Where(s => !s.Demo).ToList())
+            foreach (var s in sessions.Values.ToList())
             {
                 var quiet = now - s.LastEvent;
                 if (quiet > TimeSpan.FromHours(3)) { sessions.Remove(s.Id); continue; }
@@ -76,7 +71,6 @@ sealed class ClaudeTracker
                     prompt = s.Prompt,
                     since = Ms(s.Since),
                     started = Ms(s.Started),
-                    demo = s.Demo,
                     stats = new { tools = s.Tools, edits = s.Edits, commands = s.Commands, reads = s.Reads, searches = s.Searches, prompts = s.Prompts, failures = s.Failures },
                     pending = s.Pending is { } p
                         ? new { id = p.Id, tool = p.Tool, detail = p.Detail, expires = Ms(p.Expires) }
@@ -131,6 +125,10 @@ sealed class ClaudeTracker
                     case "PostToolUseFailure":
                         s.Failures++;
                         if (s.State != "working") Set(s, "working", "Thinking…");
+                        break;
+                    case "PermissionRequest" when tool is "AskUserQuestion" or "ExitPlanMode":
+                        // questions and plans are answered in the terminal, not with Allow/Deny
+                        Set(s, "input", "Waiting for you");
                         break;
                     case "PermissionRequest":
                         Set(s, "waiting", $"Wants to use {FriendlyTool(tool)}");
@@ -207,6 +205,14 @@ sealed class ClaudeTracker
         Changed?.Invoke();
     }
 
+    /// <summary>The last phone went away: let every waiting permission request fall back to the terminal now.</summary>
+    public void ReleasePending()
+    {
+        List<PendingPermission> waiting;
+        lock (gate) waiting = sessions.Values.Where(s => s.Pending != null).Select(s => s.Pending!).ToList();
+        foreach (var p in waiting) p.Decision.TrySetResult("");
+    }
+
     // ---------------------------------------------------------------- open sessions (~/.claude/sessions/<pid>.json)
 
     static readonly string RegistryDir = Path.Combine(
@@ -276,7 +282,7 @@ sealed class ClaudeTracker
                     else if (info.Status == "idle" && s.State == "working") { Set(s, "done", "Finished"); changed = true; }
                 }
             }
-            foreach (var s in sessions.Values.Where(s => !s.Demo && !alive.ContainsKey(s.Id)).ToList())
+            foreach (var s in sessions.Values.Where(s => !alive.ContainsKey(s.Id)).ToList())
             {
                 // gone from the registry: closed (keep hook-only sessions for a short while)
                 if (s.FromRegistry || now - s.LastEvent > TimeSpan.FromSeconds(60))
@@ -298,83 +304,6 @@ sealed class ClaudeTracker
             return !p.HasExited && p.ProcessName.StartsWith("claude", StringComparison.OrdinalIgnoreCase);
         }
         catch { return false; }
-    }
-
-    // ---------------------------------------------------------------- demo battle (fake sessions, tray menu)
-
-    static readonly string[] DemoProjects = ["siteos", "cnc-monitor", "deskpanel", "portfolio"];
-    static readonly (string tool, string text)[] DemoTools =
-    [
-        ("Bash", "Running npm test"), ("Edit", "Editing Hub.cs"), ("Read", "Reading README.md"),
-        ("Grep", "Searching for TODO"), ("Bash", "Running git status"), ("Write", "Writing api.ts"),
-        ("Edit", "Editing styles.css"), ("WebSearch", "Searching the web: compose canvas"),
-        ("Bash", "Running dotnet build"), ("Glob", "Looking for **/*.kt"),
-    ];
-
-    public void SetDemo(bool on)
-    {
-        lock (gate)
-        {
-            demoTimer?.Dispose();
-            demoTimer = null;
-            foreach (var id in sessions.Values.Where(s => s.Demo).Select(s => s.Id).ToList()) sessions.Remove(id);
-            if (on)
-            {
-                for (int i = 0; i < DemoProjects.Length; i++)
-                {
-                    var s = new ClaudeSession
-                    {
-                        Id = $"demo:{i}", Project = DemoProjects[i], Demo = true,
-                        Started = DateTime.UtcNow.AddSeconds(i), Prompt = "Demo battle – not a real session",
-                        Tools = rng.Next(5, 40), Edits = rng.Next(0, 12), Commands = rng.Next(0, 15), Prompts = rng.Next(1, 6),
-                    };
-                    Set(s, "working", DemoTools[rng.Next(DemoTools.Length)].text);
-                    sessions[s.Id] = s;
-                }
-                demoTimer = new System.Threading.Timer(_ => DemoTick(), null, 1500, 1500);
-            }
-        }
-        Log.Info($"demo battle {(on ? "on" : "off")}");
-        Changed?.Invoke();
-    }
-
-    void DemoTick()
-    {
-        lock (gate)
-        {
-            foreach (var s in sessions.Values.Where(s => s.Demo))
-            {
-                if (s.Pending != null)
-                {
-                    if (DateTime.UtcNow > s.Pending.Expires) { s.Pending = null; Set(s, "working", "Thinking…"); }
-                    continue;
-                }
-                var roll = rng.NextDouble();
-                if (s.State is "done" or "idle" or "input")
-                {
-                    if (roll < 0.25) { s.Prompts++; Set(s, "working", "Thinking…"); }
-                    continue;
-                }
-                if (roll < 0.75)
-                {
-                    var (tool, text) = DemoTools[rng.Next(DemoTools.Length)];
-                    Count(s, tool);
-                    Set(s, "working", text);
-                }
-                else if (roll < 0.83) Set(s, "done", "Finished");
-                else if (roll < 0.88) Set(s, "input", "Waiting for you");
-                else if (roll < 0.90 && !sessions.Values.Any(x => x.Pending != null))
-                {
-                    Set(s, "waiting", "Wants to use Bash");
-                    s.Pending = new PendingPermission
-                    {
-                        Id = Guid.NewGuid().ToString("N"), SessionId = s.Id, Tool = "Bash",
-                        Detail = "npm run deploy   (demo – nothing will run)", Expires = DateTime.UtcNow.AddSeconds(20),
-                    };
-                }
-            }
-        }
-        Changed?.Invoke();
     }
 
     // ---------------------------------------------------------------- helpers

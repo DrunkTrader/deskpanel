@@ -22,9 +22,6 @@ sealed class TrayContext : ApplicationContext
         {
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Log.FilePath) { UseShellExecute = true }); } catch { }
         });
-        var demo = new ToolStripMenuItem("Demo battle (fake Claude sessions)") { CheckOnClick = true };
-        bool syncing = false;
-        demo.CheckedChanged += (_, _) => { if (!syncing) hub.Claude.SetDemo(demo.Checked); };
         var forget = new ToolStripMenuItem("Forget paired phones", null, (_, _) =>
         {
             if (MessageBox.Show("Forget all paired phones? They will have to be approved again.", "DeskPanel",
@@ -39,7 +36,6 @@ sealed class TrayContext : ApplicationContext
             new ToolStripMenuItem("DeskPanel") { Enabled = false },
             status,
             new ToolStripSeparator(),
-            demo,
             autostart,
             forget,
             openLog,
@@ -54,7 +50,6 @@ sealed class TrayContext : ApplicationContext
             int n = hub.ClientCount;
             var text = n switch { 0 => "No phone connected", 1 => "1 phone connected", _ => $"{n} phones connected" };
             status.Text = text;
-            if (demo.Checked != hub.Claude.DemoEnabled) { syncing = true; demo.Checked = hub.Claude.DemoEnabled; syncing = false; }
             icon.Text = "DeskPanel – " + text;
         };
         timer.Start();

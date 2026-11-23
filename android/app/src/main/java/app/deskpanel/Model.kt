@@ -46,7 +46,6 @@ data class Session(
     val prompt: String,
     val since: Long,
     val started: Long,
-    val demo: Boolean,
     val stats: SessionStats,
     val pending: Pending?,
 ) {
@@ -69,7 +68,6 @@ data class Stats(
     val volume: Vol?,
     val media: Media?,
     val sessions: List<Session>,
-    val demo: Boolean,
     /** laptop clock minus phone clock, ms */
     val clockOffset: Long,
 )
@@ -110,7 +108,6 @@ fun parseStats(j: JSONObject): Stats {
                 prompt = s.str("prompt"),
                 since = s.optLong("since"),
                 started = s.optLong("started"),
-                demo = s.optBoolean("demo"),
                 stats = if (st == null) SessionStats() else SessionStats(
                     st.optInt("tools"), st.optInt("edits"), st.optInt("commands"), st.optInt("reads"),
                     st.optInt("searches"), st.optInt("prompts"), st.optInt("failures"),
@@ -136,7 +133,6 @@ fun parseStats(j: JSONObject): Stats {
                 it.optDouble("position", 0.0), it.optDouble("duration", 0.0))
         },
         sessions = sessions,
-        demo = j.optBoolean("demo"),
         clockOffset = if (j.has("now")) j.optLong("now") - System.currentTimeMillis() else 0,
     )
 }

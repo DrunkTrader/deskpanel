@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -82,6 +84,7 @@ class PanelViewModel(app: Application) : AndroidViewModel(app) {
         loop = null
         socket?.cancel()
         socket = null
+        _state.update { if (it.conn == Conn.Connected) it.copy(conn = Conn.Reconnecting) else it }
     }
 
     fun retryPairing() {
@@ -90,10 +93,24 @@ class PanelViewModel(app: Application) : AndroidViewModel(app) {
         retrySignal.value++
     }
 
-    fun useAddress(ip: String) {
-        prefs.edit().putString("host", ip.trim()).putInt("port", DEFAULT_PORT).apply()
+    /** Accepts "192.168.1.3", "192.168.1.3:47811" or a pasted "http://…" address. False if it can't be used. */
+    fun useAddress(input: String): Boolean {
+        val (host, port) = parseAddress(input) ?: return false
+        prefs.edit().putString("host", host).putInt("port", port).apply()
         stop()
         start()
+        return true
+    }
+
+    private fun parseAddress(input: String): Pair<String, Int>? {
+        var t = input.trim().substringAfter("://").substringBefore('/')
+        if (t.isEmpty()) return null
+        var port = DEFAULT_PORT
+        if (t.count { it == ':' } == 1) {
+            port = t.substringAfter(':').toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
+            t = t.substringBefore(':')
+        }
+        return if ("http://$t:$port/".toHttpUrlOrNull() != null) t to port else null
     }
 
     // ---------------------------------------------------------------- commands
@@ -130,8 +147,6 @@ class PanelViewModel(app: Application) : AndroidViewModel(app) {
         send(JSONObject().put("cmd", "claude").put("id", pendingId).put("decision", decision))
     }
 
-    fun demo(on: Boolean) = send(JSONObject().put("cmd", "demo").put("on", on))
-
     private fun send(o: JSONObject) {
         socket?.send(o.toString())
     }
@@ -145,8 +160,9 @@ class PanelViewModel(app: Application) : AndroidViewModel(app) {
                 retrySignal.first { it != v }
                 continue
             }
-            val found = discover()
             val saved = prefs.getString("host", null)?.let { it to prefs.getInt("port", DEFAULT_PORT) }
+            val found = discover(preferHost = saved?.first)
+            currentCoroutineContext().ensureActive()
             val target = found ?: saved
             if (target == null) {
                 markWaiting()
@@ -157,7 +173,12 @@ class PanelViewModel(app: Application) : AndroidViewModel(app) {
                 if (it.conn == Conn.Pairing || it.conn == Conn.Connected) it
                 else it.copy(conn = if (it.stats == null) Conn.Connecting else Conn.Reconnecting, address = target.first)
             }
-            val opened = runSession(target.first, target.second)
+            val opened = try {
+                runSession(target.first, target.second)
+            } catch (e: IllegalArgumentException) {
+                prefs.edit().remove("host").apply() // unusable saved address: forget it, keep searching
+                false
+            }
             if (!rejected) markWaiting()
             delay(if (opened) 500 else 1500)
         }
@@ -288,12 +309,17 @@ class PanelViewModel(app: Application) : AndroidViewModel(app) {
     private fun wifiNetwork(cm: ConnectivityManager): Network? {
         @Suppress("DEPRECATION")
         return cm.allNetworks.firstOrNull {
-            cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            val caps = cm.getNetworkCapabilities(it) ?: return@firstOrNull false
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
         }
     }
 
-    /** Broadcasts "DESKPANEL_DISCOVER" on the Wi-Fi; the laptop answers with its port. */
-    private fun discover(): Pair<String, Int>? {
+    /**
+     * Broadcasts "DESKPANEL_DISCOVER" on the Wi-Fi; laptops answer with their port. If several answer, the one we
+     * are already paired with ([preferHost]) wins.
+     */
+    private fun discover(preferHost: String?): Pair<String, Int>? {
         val cm = getApplication<Application>().getSystemService(ConnectivityManager::class.java)
         val wifi = wifiNetwork(cm)
         // Talk over Wi-Fi even if Android prefers mobile data for the internet.
@@ -308,6 +334,7 @@ class PanelViewModel(app: Application) : AndroidViewModel(app) {
         }
         targets += InetAddress.getByName("255.255.255.255")
 
+        var first: Pair<String, Int>? = null
         try {
             DatagramSocket().use { sock ->
                 sock.broadcast = true
@@ -326,14 +353,18 @@ class PanelViewModel(app: Application) : AndroidViewModel(app) {
                         }
                         val j = runCatching { JSONObject(String(pkt.data, 0, pkt.length)) }.getOrNull() ?: continue
                         val addr = pkt.address?.hostAddress ?: continue
-                        if (j.optString("app") == "deskpanel") return addr to j.optInt("port", DEFAULT_PORT)
+                        if (j.optString("app") != "deskpanel") continue
+                        val hit = addr to j.optInt("port", DEFAULT_PORT)
+                        if (preferHost == null || addr == preferHost) return hit
+                        if (first == null) first = hit
                     }
+                    if (first != null) return first
                 }
             }
         } catch (e: Exception) {
-            return null
+            return first
         }
-        return null
+        return first
     }
 
     override fun onCleared() {

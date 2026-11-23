@@ -4,13 +4,17 @@ Turn an old Android phone into a **pixel-art desk panel** for your Windows lapto
 
 Live system stats, media and volume controls, synced lyrics, and a **Claude Code arena**: each open Claude Code session is a little pixel mascot, the busy ones fight, and you can **approve or deny Claude's permission requests from your phone**.
 
-Native Android app (Kotlin + Jetpack Compose) plus a small Windows tray agent (.NET). It connects over Wi-Fi with auto-discovery. No browser and no cloud.
+Native Android app (Kotlin + Jetpack Compose) plus a small Windows tray agent (.NET). It runs **over Wi-Fi with no cable**: the phone finds the laptop on its own, and reconnects by itself after Wi-Fi drops or the laptop sleeps. No browser and no cloud.
+
+![DeskPanel demo](docs/demo.gif)
+
+▶ [Watch the full-quality video (MP4)](docs/demo.mp4)
 
 ![Laptop tab](docs/screenshots/laptop.png)
 
-| Claude sessions | Demo battle |
+| Claude arena | Approve from the phone |
 |---|---|
-| ![Claude tab](docs/screenshots/claude.png) | ![Battle](docs/screenshots/battle.png) |
+| ![Claude arena](docs/screenshots/battle.png) | ![Permission request](docs/screenshots/permission.png) |
 
 ![Lyrics over pixel time-lapse](docs/screenshots/lyrics.png)
 
@@ -25,18 +29,19 @@ Native Android app (Kotlin + Jetpack Compose) plus a small Windows tray agent (.
   - Every open Claude Code session appears as a pixel mascot, with states for working, waiting, needs input, done and idle.
   - Busy sessions pair up and brawl in the arena.
   - Leaderboard with XP and levels, earned from tools used, edits, commands and prompts.
-  - A **Demo battle** button spawns fake sessions so you can watch a full fight.
 - **Phone approvals**
   - When Claude Code asks for permission, a pixel pop-up appears on the phone with **ALLOW** and **DENY** buttons.
-  - If you don't answer within 60 s, the terminal prompt is used as normal.
+  - If you don't answer within 60 s, the terminal prompt is used as normal. If the phone goes offline, waiting requests go back to the terminal right away.
+  - Questions and plan approvals stay in the terminal, since they need more than Allow/Deny.
 - **Ambient mode**
   - Starts when music is playing and the screen hasn't been touched for 12 s.
   - Shows synced lyrics from [LRCLIB](https://lrclib.net) when available, otherwise a pixel city time-lapse with a day/night cycle.
   - Tap the screen to get the controls back.
-- **Zero-config connect**
-  - The phone finds the laptop by UDP broadcast.
+- **Wireless, zero-config connect**
+  - No USB cable needed. The phone finds the laptop on the Wi-Fi by UDP broadcast.
   - The first connection asks for approval on the laptop, and the phone is remembered after that.
-  - You can also enter the laptop's IP by hand.
+  - It reconnects on its own when Wi-Fi drops, the laptop's IP changes or the laptop wakes from sleep. If several laptops run the agent, it sticks to the one it's paired with.
+  - You can also enter the laptop's IP by hand, for example `192.168.1.3` or `192.168.1.3:47811`.
 - Landscape, immersive, keeps the screen on.
 
 ## How it works
@@ -69,12 +74,14 @@ dotnet publish -c Release -o "$env:LOCALAPPDATA\DeskPanel\app"
 ```
 
 - A tray icon appears.
-- The tray menu has: **Start with Windows**, **Demo battle**, **Forget paired phones**, **Open log**.
+- The tray menu has: **Start with Windows**, **Forget paired phones**, **Open log**.
 - Allow the app through Windows Firewall on **private** networks when asked. It uses TCP 47811 and UDP 47810.
 
 ### 2. Android app
 
-Requires JDK 17 and the Android SDK (platform 35, build-tools 35.0.0).
+**Easiest:** download `DeskPanel.apk` from [Releases](../../releases) and open it on the phone. You may need to allow installs from unknown sources.
+
+**Or build it yourself.** Requires JDK 17 and the Android SDK (platform 35, build-tools 35.0.0).
 
 ```powershell
 cd android
@@ -83,8 +90,11 @@ echo "sdk.dir=C\:\\path\\to\\Android\\Sdk" > local.properties
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-1. Open **DeskPanel** on the phone while it's on the same Wi-Fi as the laptop.
+1. Connect the phone to the same Wi-Fi as the laptop and open **DeskPanel**. No cable is needed.
 2. Click **Yes** in the pairing prompt that appears on the laptop.
+3. Put the phone on its stand. Plug it into a charger if you leave it on all day, because the screen stays on.
+
+> **Can't connect?** The laptop must allow inbound TCP 47811 and UDP 47810 on your Wi-Fi network. VPN clients that block LAN traffic, or guest networks with "client isolation", also stop the phone from reaching the laptop.
 
 ### 3. Claude Code integration (optional)
 

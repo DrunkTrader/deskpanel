@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -66,7 +68,8 @@ fun AmbientView(media: Media, art: ImageBitmap?, lyrics: List<LyricLine>?, media
             .background(Bg)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
     ) {
-        TimeLapse(Modifier.fillMaxSize())
+        // no clouds behind lyrics: they read as smudges through the dimmed lines
+        TimeLapse(Modifier.fillMaxSize(), clouds = lyrics == null)
         if (lyrics != null) {
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
             LyricsView(lyrics, media, mediaAt, Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 24.dp))
@@ -110,7 +113,9 @@ private fun AmbientClock(modifier: Modifier) {
     val time = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val date = remember { SimpleDateFormat("EEE dd MMM", Locale.getDefault()) }
     Column(modifier, horizontalAlignment = Alignment.End) {
-        Text(time.format(Date(now)), fontSize = 64.sp, lineHeight = 60.sp)
+        // a hard pixel shadow keeps the clock readable when a cloud drifts behind it
+        val shadow = Shadow(Color.Black.copy(alpha = 0.6f), Offset(4f, 4f), 0f)
+        Text(time.format(Date(now)), fontSize = 64.sp, lineHeight = 60.sp, style = LocalTextStyle.current.copy(shadow = shadow))
         Text(date.format(Date(now)).uppercase(), fontFamily = PixelHead, fontSize = 8.sp, color = TextMain.copy(alpha = 0.7f))
     }
 }
@@ -214,16 +219,16 @@ private fun sky(p: Float): Triple<Color, Color, Float> {
 }
 
 @Composable
-fun TimeLapse(modifier: Modifier = Modifier) {
+fun TimeLapse(modifier: Modifier = Modifier, clouds: Boolean = true) {
     val scene = remember { makeScene() }
     val time by produceState(0L) {
         val start = withFrameMillis { it }
         while (true) withFrameMillis { value = it - start }
     }
-    Canvas(modifier) { drawCity(time / 1000f, scene) }
+    Canvas(modifier) { drawCity(time / 1000f, scene, clouds) }
 }
 
-private fun DrawScope.drawCity(t: Float, scene: Scene) {
+private fun DrawScope.drawCity(t: Float, scene: Scene, clouds: Boolean) {
     val rows = 90
     val cell = size.height / rows
     val cols = ceil(size.width / cell).toInt()
@@ -264,7 +269,7 @@ private fun DrawScope.drawCity(t: Float, scene: Scene) {
 
     // clouds
     val cloudColor = lerp(Color(0xFF2A3050), Color(0xFFF4F7FF), day).copy(alpha = 0.85f)
-    scene.clouds.forEach { c ->
+    if (clouds) scene.clouds.forEach { c ->
         val w = c[3].toInt()
         val cx = (((t * c[1] + c[2]) % (cols + 40)) - 20).toInt()
         val cy = c[0].toInt()

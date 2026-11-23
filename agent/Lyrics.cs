@@ -21,6 +21,12 @@ sealed partial class Lyrics
     public List<LyricLine>? Lines { get; private set; }
     public event Action? Changed;
 
+    /// <summary>Version and lines read together, so a phone never gets a new version number with old lines.</summary>
+    public (int Version, List<LyricLine>? Lines) Current()
+    {
+        lock (gate) return (Version, Lines);
+    }
+
     static HttpClient CreateClient()
     {
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };

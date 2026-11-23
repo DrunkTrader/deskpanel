@@ -27,9 +27,11 @@ static class Pairing
         }
     }
 
-    public static async Task<string?> Ask(string name, string address)
+    /// <summary>Asks on the laptop. Returns null if refused, unanswered, or the phone left (<paramref name="ct"/>).</summary>
+    public static async Task<string?> Ask(string name, string address, CancellationToken ct)
     {
-        if (!await OneDialog.WaitAsync(TimeSpan.FromMinutes(2))) return null;
+        try { if (!await OneDialog.WaitAsync(TimeSpan.FromMinutes(2), ct)) return null; }
+        catch (OperationCanceledException) { return null; } // the phone gave up before its turn: no dialog
         try
         {
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -45,8 +47,9 @@ static class Pairing
             t.Start();
 
             bool ok;
-            try { ok = await tcs.Task.WaitAsync(TimeSpan.FromMinutes(2)); }
+            try { ok = await tcs.Task.WaitAsync(TimeSpan.FromMinutes(2), ct); }
             catch (TimeoutException) { ok = false; }
+            catch (OperationCanceledException) { Log.Info($"phone {name} ({address}) left before it was approved"); return null; }
             if (!ok) { Log.Info($"phone {name} ({address}) was not allowed"); return null; }
 
             var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
